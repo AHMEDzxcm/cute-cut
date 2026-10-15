@@ -15,6 +15,8 @@ A lightweight desktop-browser video editor. Media stays on your device; there ar
 - Scale, position and rotation keyframes with visible timeline diamonds and previous/next navigation.
 - Color-based background removal (chroma key), plus rectangle, ellipse and split masks with rotation, feather and inversion. There is no AI retouch or automatic subject segmentation.
 
+Tools → Freeze frame splits the selected video at the playhead and inserts a silent, three-second still between the two pieces. Drag the still edges or use Freeze duration to change its length. It preserves the selected frame’s transform/mask and works with undo, upper layers and export.
+
 ## Export
 
 Export video renders the actual layered canvas frame by frame, in bounded batches, and mixes the selected audio streams from the original files. The export panel supports Original, 480P, 720P, 1080P, 2K and 4K resolutions; Lower, Recommended, Higher or custom video bit rates (0.1–200 Mbps); H.264 or H.265/HEVC; MP4 or MOV; and 24, 25, 30, 50 or 60 fps. The selected canvas aspect ratio is preserved. H.265 uses the isolated threaded browser engine; H.264 remains available on the single-thread fallback. Export includes transforms, keyframes, masks, chroma key, speed and volume changes. Keep the tab visible during rendering. Cancel stops after the current batch and releases its temporary files.

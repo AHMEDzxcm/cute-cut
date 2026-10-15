@@ -2,6 +2,8 @@
 // The main track is magnetic; overlay tracks retain explicit positions. Higher tracks render on top.
 let layerCount=1,activeVisual=null,lastLayerTick=0,dragState=null,libraryDragMedia=null;
 const lowerAudio=new Map();
+function clipMediaTime(c,time){return source(c).still?0:c.in+Math.max(0,Math.min(clipLength(c),time-c.start))*(c.speed||1);}
+function maximumClipSourceTime(c){return source(c).still?86400:source(c).duration;}
 function packMainTrack(items){let end=0;for(const c of items.filter(c=>c.track===0).sort((a,b)=>a.start-b.start)){c.start=end;end+=clipLength(c);}return items;}
 function layoutClips(){const ends=new Map();for(const c of clips){c.track=Number.isInteger(c.track)?Math.max(0,c.track):0;if(!Number.isFinite(c.start))c.start=ends.get(c.track)||0;c.start=Math.max(0,c.start);ends.set(c.track,Math.max(ends.get(c.track)||0,c.start+clipLength(c)));}packMainTrack(clips);return clips;}
 duration=()=>{layoutClips();return Math.max(0,...clips.map(c=>c.start+clipLength(c)));};
@@ -25,7 +27,8 @@ function syncLowerAudio(t,top,seek){
 setPosition=function(t,seek=true,allowEmptySpace=false){
   playhead=Math.max(0,allowEmptySpace?t:Math.min(duration(),t));$('currentTime').textContent=fmt(playhead);$('playhead').style.left=playhead*scale+'px';
   const found=locate(playhead);if(!found){video.pause();trackAudio.pause();video.style.display='none';$('emptyPreview').hidden=clips.length>0;$('previewError').hidden=!clips.length;$('previewError').textContent='No video at this position';activeVisual=null;syncLowerAudio(playhead,null,seek);return;}
-  const {c,offset}=found,m=source(c),target=c.in+offset*(c.speed||1),changed=activeVisual!==c.id;activeVisual=c.id;
+  const {c,offset}=found,m=source(c),target=clipMediaTime(c,playhead),changed=activeVisual!==c.id;activeVisual=c.id;
+  if(m.still){$('emptyPreview').hidden=true;$('previewError').hidden=true;video.pause();trackAudio.pause();video.style.display='none';$('previewInfo').textContent=m.width+' × '+m.height+' · Freeze frame';if(!(typeof exportBusy==='boolean'&&exportBusy))syncLowerAudio(playhead,c,seek||changed);return;}
   $('emptyPreview').hidden=true;$('previewError').hidden=true;video.style.display='block';$('previewInfo').textContent=`${m.width} × ${m.height} · Video ${c.track+1} on top`;
   if(video.dataset.layerMedia!==m.id){video.dataset.layerMedia=m.id;video.src=CuteEngine.mediaURL(m.id);}
   loaded=m.id;video.playbackRate=c.speed||1;trackAudio.playbackRate=c.speed||1;video.preservesPitch=true;trackAudio.preservesPitch=true;
@@ -35,7 +38,7 @@ setPosition=function(t,seek=true,allowEmptySpace=false){
 };
 togglePlay=function(){if(!clips.length)return;if(playing)return pause();enableAudio();if(playhead>=duration()-.04)setPosition(0);playing=true;lastLayerTick=performance.now();$('play').textContent='❚❚';$('play').setAttribute('aria-label','Pause');setPosition(playhead);};
 $('play').onclick=togglePlay;video.onended=()=>{};
-tick=function(now){if(playing){const current=Number.isFinite(now)?now:performance.now(),dt=lastLayerTick?Math.min(.1,(current-lastLayerTick)/1000):0;lastLayerTick=current;const found=locate(playhead);if(!found||video.readyState>=2&&!video.seeking){const next=playhead+dt;if(next>=duration()){pause();setPosition(duration());}else setPosition(next,false);}}else lastLayerTick=0;requestAnimationFrame(tick);};
+tick=function(now){if(playing){const current=Number.isFinite(now)?now:performance.now(),dt=lastLayerTick?Math.min(.1,(current-lastLayerTick)/1000):0;lastLayerTick=current;const found=locate(playhead);if(!found||source(found.c).still||video.readyState>=2&&!video.seeking){const next=playhead+dt;if(next>=duration()){pause();setPosition(duration());}else setPosition(next,false);}}else lastLayerTick=0;requestAnimationFrame(tick);};
 
 const settingsBeforeLayers=settings;
 settings=function(){settingsBeforeLayers();const c=chosen();if(!c)return;let info=$('placementInfo');if(!info){info=document.createElement('div');info.id='placementInfo';info.className='detail-line';$('speedInfo').after(info);}info.innerHTML=`<span>Video ${c.track+1} · ${fmt(c.start)}</span><strong>${c.track===0?'Main track':'Overlay track'}</strong>`;};
@@ -92,14 +95,14 @@ $('videoTrack').onpointerdown=event=>{
   if(event.button!==0)return;const el=event.target.closest('.clip');if(!el)return;event.preventDefault();pause();closeMenu();timelineViewport.focus({preventScroll:true});selected=el.dataset.id;selectionKind='video';const c=chosen(),initial={...c},initialClips=clips.map(item=>({...item})),initialUndo=[...undoStack],initialRedo=[...redoStack],edge=event.target.closest('[data-edge]')?.dataset.edge,x=event.clientX,y=event.clientY,grab=(x-$('timelineCanvas').getBoundingClientRect().left)/scale-c.start;let moved=false,placement=null,plan=null,committed=false;
   const move=ev=>{if(!moved&&Math.hypot(ev.clientX-x,ev.clientY-y)<5)return;if(!moved){moved=true;if(edge){snapshot();committed=true;}}
     if(edge){const delta=(ev.clientX-x)/scale,speed=initial.speed||1;
-      if(c.track===0){
+      if(c.track===0||source(c).still){
         if(edge==='in')c.in=Math.max(0,Math.min(initial.out-.05*speed,initial.in+delta*speed));
-        else c.out=Math.max(initial.in+.05*speed,Math.min(source(c).duration,initial.out+delta*speed));
+        else c.out=Math.max(initial.in+.05*speed,Math.min(maximumClipSourceTime(c),initial.out+delta*speed));
         // Keep the original sequence order as trims ripple later clips.
-        for(const item of clips)if(item.track===0)item.start=initialClips.find(x=>x.id===item.id).start;
-        packMainTrack(clips);
+        for(const item of clips)if(item.track===c.track)item.start=initialClips.find(x=>x.id===item.id).start;
+        if(c.track===0)packMainTrack(clips);else{const delta=clipLength(c)-clipLength(initial);for(const item of clips)if(item.id!==c.id&&item.track===c.track&&item.start>=initial.start+clipLength(initial)-.000001)item.start+=delta;}
       }else if(edge==='in'){const earlier=clips.filter(a=>a.id!==c.id&&a.track===c.track&&a.start<initial.start).reduce((n,a)=>Math.max(n,a.start+clipLength(a)),0),change=Math.max(-initial.in/speed,earlier-initial.start,Math.min(clipLength(initial)-.05,delta));c.in=initial.in+change*speed;c.start=initial.start+change;
-      }else{const next=clips.filter(a=>a.id!==c.id&&a.track===c.track&&a.start>initial.start).reduce((n,a)=>Math.min(n,a.start),Infinity);c.out=Math.max(initial.in+.05*speed,Math.min(source(c).duration,initial.out+delta*speed,initial.in+(next-initial.start)*speed));}
+      }else{const next=clips.filter(a=>a.id!==c.id&&a.track===c.track&&a.start>initial.start).reduce((n,a)=>Math.min(n,a.start),Infinity);c.out=Math.max(initial.in+.05*speed,Math.min(maximumClipSourceTime(c),initial.out+delta*speed,initial.in+(next-initial.start)*speed));}
       render();setPosition(c.start);return;}
     const viewport=timelineViewport.getBoundingClientRect();if(ev.clientX>viewport.right-35)timelineViewport.scrollLeft+=18;else if(ev.clientX<viewport.left+35)timelineViewport.scrollLeft-=18;
     placement=placementFromPointer(ev.clientX,ev.clientY,c.id,grab);plan=placement?planClipMove(c.id,placement.track,placement.time,placement.targetId,placement.after):null;if(plan)drawDrop(plan,placement,clipLength(c));else clearDropMarker();
@@ -118,7 +121,7 @@ $('videoTrack').addEventListener('dragover',event=>{if(!libraryDragMedia)return;
 $('videoTrack').addEventListener('drop',event=>{if(!libraryDragMedia)return;event.preventDefault();event.stopPropagation();const placement=placementFromPointer(event.clientX,event.clientY,null);if(placement){pause();snapshot();const m=library.find(x=>x.id===libraryDragMedia),c={id:uid(),mediaId:m.id,in:0,out:m.duration,volume:1,audioTrack:0},target=clips.find(x=>x.id===placement.targetId),start=target?target.start+(placement.after?clipLength(target):0):placement.time;insertClipAt(c,placement.track,start);selected=c.id;selectionKind='video';layerCount=Math.max(layerCount,placement.track+1);render();setPosition(c.start);}libraryDragMedia=null;clearDropMarker();});
 const resetBeforeLayers=$('resetDemo').onclick;$('resetDemo').onclick=()=>{pause();layerCount=1;resetBeforeLayers();render();};
 const oldSplitClick=$('split').onclick;$('split').onclick=()=>split();
-for(const id of ['trimIn','trimOut'])$(id).onchange=()=>{const c=chosen();if(!c)return;const a=Number($('trimIn').value),raw=Number($('trimOut').value),b=Math.min(raw,source(c).duration);if(!Number.isFinite(a)||!Number.isFinite(raw)||a<0||raw>source(c).duration+.0051||b-a<.05){settings();return toast('Keep trim points inside the original video.');}const oldEnd=c.start+clipLength(c),oldLength=clipLength(c),newLength=(b-a)/(c.speed||1),next=clips.filter(x=>x.id!==c.id&&x.track===c.track&&x.start>c.start).reduce((n,x)=>Math.min(n,x.start),Infinity);if(c.track!==0&&c.start+newLength>next+.001){settings();return toast('Move the following clip to make room for a longer trim.');}pause();snapshot();c.in=a;c.out=b;if(c.track===0)for(const item of clips)if(item.id!==c.id&&item.track===0&&item.start>=oldEnd-.001)item.start+=newLength-oldLength;render();setPosition(Math.min(playhead,duration()));};
+for(const id of ['trimIn','trimOut'])$(id).onchange=()=>{const c=chosen();if(!c)return;const a=Number($('trimIn').value),raw=Number($('trimOut').value),b=Math.min(raw,maximumClipSourceTime(c));if(!Number.isFinite(a)||!Number.isFinite(raw)||a<0||raw>maximumClipSourceTime(c)+.0051||b-a<.05){settings();return toast('Keep trim points inside the original video.');}const oldEnd=c.start+clipLength(c),oldLength=clipLength(c),newLength=(b-a)/(c.speed||1),next=clips.filter(x=>x.id!==c.id&&x.track===c.track&&x.start>c.start).reduce((n,x)=>Math.min(n,x.start),Infinity);if(c.track!==0&&!source(c).still&&c.start+newLength>next+.001){settings();return toast('Move the following clip to make room for a longer trim.');}pause();snapshot();c.in=a;c.out=b;if(c.track===0||source(c).still)for(const item of clips)if(item.id!==c.id&&item.track===c.track&&item.start>=oldEnd-.001)item.start+=newLength-oldLength;render();setPosition(Math.min(playhead,duration()));};
 timelineViewport.addEventListener('scroll',()=>{document.querySelector('.track-labels').style.transform=`translateY(${-timelineViewport.scrollTop}px)`;});
 // Seek from empty lanes and background, while retaining clip and scrollbar gestures.
 let finishTimelineSeek=null;

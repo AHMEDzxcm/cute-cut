@@ -63,7 +63,7 @@ window.CuteEngine = (() => {
     finally {await remove(name);status('Browser engine ready');}
   }
   function checkedTrack(m,index) { if(!m || !Number.isInteger(index) || index<0 || index>=m.audioTracks.length) throw Error('Invalid audio track.'); }
-  function validateRange(m,start,end,volume) {if(!m||![start,end,volume].every(Number.isFinite)||start<0||end>m.duration+.01||end-start<.04||volume<0||volume>2)throw Error('Invalid trim range or volume.');}
+  function validateRange(m,start,end,volume) {if(!m||![start,end,volume].every(Number.isFinite)||start<0||end>(m.still?86400:m.duration)+.01||end-start<.000001||volume<0||volume>2)throw Error('Invalid trim range or volume.');}
   async function extractAudio(data,job) {
     const m = media.get(data.mediaId), tracks = data.track==='all'?m.audioTracks.map(t=>t.index):[data.track];
     job.files=[];
@@ -124,6 +124,7 @@ window.CuteEngine = (() => {
     if(route==='/api/status')return {encoder:!!window.WebAssembly,token:'browser-local'};
     if(route==='/api/import')return serial(()=>importVideo(options.body));
     const data=options.body && typeof options.body==='string'?JSON.parse(options.body):options.body||{};
+    if(route==='/api/still-image'){if(!(data.blob instanceof Blob)||data.blob.type!=='image/png'||![data.width,data.height].every(n=>Number.isInteger(n)&&n>0))throw Error('Invalid freeze frame.');const item={id:crypto.randomUUID(),name:String(data.name||'Freeze frame'),duration:3,width:data.width,height:data.height,audio:false,audioTracks:[],still:true,url:URL.createObjectURL(data.blob)};media.set(item.id,item);return {...item};}
     if(route==='/api/export-capabilities')return serial(exportCapabilities);
     if(route==='/api/render/start')return serial(async()=>{
       if(exporting)throw Error('An export is already running.');

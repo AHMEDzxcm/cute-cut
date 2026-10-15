@@ -22,14 +22,14 @@ function paintComposition(){
   const top=active.at(-1),ids=new Set(active.map(c=>c.id)),frames=[];
   // Keep decoders warm across clip boundaries, rather than unloading them on every seek.
   for(const [id,el]of visualSources)if(!ids.has(id)||id===top?.id){el.pause();if(!clips.some(c=>c.id===id)){el.removeAttribute('src');el.load();visualSources.delete(id);}}
-  for(const c of active){let el=c.id===top?.id?video:visualSources.get(c.id);if(!el){el=document.createElement('video');el.muted=true;el.playsInline=true;el.preload='auto';el.src=CuteEngine.mediaURL(c.mediaId);visualSources.set(c.id,el);}
-    if(el!==video){el.playbackRate=c.speed||1;const target=c.in+(playhead-c.start)*(c.speed||1);if(Math.abs(el.currentTime-target)>.04)seekPreviewVideo(el,target);if(playing&&el.paused)el.play().catch(()=>{});else if(!playing&&!el.paused)el.pause();}
+  for(const c of active){if(source(c).still){const item=stillImageFor(source(c));frames.push({c,frame:item.ready?{image:item.image,time:0,revision:1}:null,g:geometry(c)});continue;}let el=c.id===top?.id?video:visualSources.get(c.id);if(!el){el=document.createElement('video');el.muted=true;el.playsInline=true;el.preload='auto';el.src=CuteEngine.mediaURL(c.mediaId);visualSources.set(c.id,el);}
+    if(el!==video){el.playbackRate=c.speed||1;const target=clipMediaTime(c,playhead);if(Math.abs(el.currentTime-target)>.04)seekPreviewVideo(el,target);if(playing&&el.paused)el.play().catch(()=>{});else if(!playing&&!el.paused)el.pause();}
     const frame=decodedPreviewFrame(el);frames.push({c,el,frame,g:geometry(c)});
   }
   // Never clear the visible canvas for a pending decoder. Commit a complete
   // composition only when every visible layer has a decoded frame to show.
   if(frames.every(item=>item.frame)){
-    const signature=JSON.stringify([compositionCanvas.width,compositionCanvas.height,...frames.map(({c,el,frame,g})=>[c.id,el.src,frame.time,frame.revision,g,c.chroma,c.mask])]);
+    const signature=JSON.stringify([compositionCanvas.width,compositionCanvas.height,...frames.map(({c,el,frame,g})=>[c.id,el?.src||source(c).url,frame.time,frame.revision,g,c.chroma,c.mask])]);
     if(signature!==lastCompositionSignature){
       if(compositionBuffer.width!==compositionCanvas.width||compositionBuffer.height!==compositionCanvas.height){compositionBuffer.width=compositionCanvas.width;compositionBuffer.height=compositionCanvas.height;}
       bufferContext.setTransform(compositionBuffer.width/w,0,0,compositionBuffer.height/h,0,0);bufferContext.fillStyle='#080a0a';bufferContext.fillRect(0,0,w,h);

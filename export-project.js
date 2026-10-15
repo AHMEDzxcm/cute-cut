@@ -6,7 +6,7 @@ const playBeforeProjectExport=togglePlay;togglePlay=function(){if(!exportBusy&&!
 async function waitForExportFrame(el,target){const deadline=performance.now()+20000;while(true){if(exportCancelled)throw Error('Export cancelled.');const state=previewDecoder(el);if(el.error)throw Error('This video format cannot be decoded by your browser. Try an H.264 MP4.');if(el.readyState>=2&&!el.seeking&&state.target===null&&!state.raf&&Math.abs(el.currentTime-target)<.035)return;if(performance.now()>deadline)throw Error('A video frame could not be decoded. Try converting that recording to H.264 MP4.');await new Promise(resolve=>setTimeout(resolve,10));}}
 async function renderExportFrame(time){
   setPosition(time,true,true);paintComposition();const active=visibleClips(time),top=active[0];
-  await Promise.all(active.map(c=>{const el=c.id===top?.id?video:visualSources.get(c.id);return waitForExportFrame(el,c.in+(time-c.start)*(c.speed||1));}));
+  await Promise.all(active.map(async c=>{if(source(c).still){const item=stillImageFor(source(c)),deadline=performance.now()+20000;while(!item.ready){if(exportCancelled)throw Error('Export cancelled.');if(item.error||performance.now()>deadline)throw Error('Could not load the freeze frame.');await new Promise(resolve=>setTimeout(resolve,10));}return;}const el=c.id===top?.id?video:visualSources.get(c.id);return waitForExportFrame(el,clipMediaTime(c,time));}));
   paintComposition();return new Promise((resolve,reject)=>compositionCanvas.toBlob(blob=>blob?resolve(blob):reject(Error('Could not render a video frame.')),'image/jpeg',.94));
 }
 async function startProjectExport(settings){
