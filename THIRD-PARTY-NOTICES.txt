@@ -1,0 +1,22 @@
+FFmpeg.wasm JavaScript wrapper: @ffmpeg/ffmpeg 0.12.15
+License: MIT
+Copyright (c) 2019 Jerome Wu
+Source and license: https://github.com/ffmpegwasm/ffmpeg.wasm
+MIT license: https://github.com/ffmpegwasm/ffmpeg.wasm/blob/v12.15/LICENSE
+
+FFmpeg.wasm single-thread core: @ffmpeg/core 0.12.10
+License: GPL-2.0-or-later
+Upstream project, build scripts and source dependencies:
+https://github.com/ffmpegwasm/ffmpeg.wasm
+Corresponding project source and build recipes (core package version 0.12.10):
+https://github.com/ffmpegwasm/ffmpeg.wasm/tree/v12.15
+Source archive: https://github.com/ffmpegwasm/ffmpeg.wasm/archive/refs/tags/v12.15.tar.gz
+FFmpeg source: https://ffmpeg.org/download.html
+FFmpeg license and legal information: https://ffmpeg.org/legal.html
+
+ffmpeg-core.js is the unmodified upstream UMD loader.
+ffmpeg-core.bin is the unmodified upstream ffmpeg-core.wasm compressed with gzip.
+Decompress it with standard gzip tools to recover the original binary.
+
+The core includes codecs and libraries listed by FFmpeg's -version output.
+The wrapper's source maps are not needed at runtime.

@@ -1,0 +1,8 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Cache-Control: no-cache
+/ffmpeg-core.bin
+  Content-Type: application/octet-stream
+  Cache-Control: public, max-age=86400
