@@ -114,7 +114,7 @@ window.CuteEngine = (() => {
     try {
       await ff.writeFile(list,encode(session.segments.map(name=>`file '${name}'`).join('\n')));
       const args=['-f','concat','-safe','0','-i',list],audible=session.clips.filter(c=>media.get(c.mediaId).audio&&c.volume>0),filters=[];
-      for(let i=0;i<audible.length;i++){const c=audible[i];args.push('-i',media.get(c.mediaId).input);filters.push(`[${i+1}:a:${c.audioTrack||0}]atrim=start=${c.in}:end=${c.out},asetpts=PTS-STARTPTS,${tempoFilters(c.speed||1)},volume=${c.volume},aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(c.start*1000)}:all=1[a${i}]`);}
+      for(let i=0;i<audible.length;i++){const c=audible[i];args.push('-ss',String(c.in),'-t',String(c.out-c.in),'-i',media.get(c.mediaId).input);filters.push(`[${i+1}:a:${c.audioTrack||0}]atrim=duration=${c.out-c.in},asetpts=PTS-STARTPTS,${tempoFilters(c.speed||1)},volume=${c.volume},aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(c.start*1000)}:all=1[a${i}]`);}
       if(audible.length){filters.push(audible.map((_,i)=>`[a${i}]`).join('')+`amix=inputs=${audible.length}:normalize=0:duration=longest[audio]`);args.push('-filter_complex',filters.join(';'),'-map','0:v:0','-map','[audio]','-c:a','aac','-b:a','192k');}else args.push('-map','0:v:0','-an');
       args.push('-c:v','copy','-t',String(session.frames/settings.fps));args.push('-movflags','+faststart');if(settings.codec==='hevc')args.push('-tag:v','hvc1');args.push(output);await exec(args,p=>job.progress=Math.round(p*99));job.url=await readBlob(output,settings.format==='mov'?'video/quicktime':'video/mp4');
     }finally{await cleanRender(session);}
@@ -136,12 +136,28 @@ window.CuteEngine = (() => {
       const session=renders.get(data.id);if(!session||!Array.isArray(data.frames)||!data.frames.length||data.frames.length>60)throw Error('Invalid render batch.');
       const names=[],settings=session.options,segment=session.id+'-part'+session.segments.length+'.mp4';session.files.push(segment);
       try{for(let i=0;i<data.frames.length;i++){const name=session.id+'-frame'+String(i).padStart(3,'0')+'.jpg';names.push(name);await ff.writeFile(name,new Uint8Array(await data.frames[i].arrayBuffer()));}
-        const encoder=settings.codec==='hevc'?'libx265':'libx264',args=['-framerate',String(settings.fps),'-i',session.id+'-frame%03d.jpg','-frames:v',String(data.frames.length),'-c:v',encoder,'-threads','1'];
+        const encoder=settings.codec==='hevc'?'libx265':'libx264',args=['-framerate',String(settings.fps),'-i',session.id+'-frame%03d.jpg','-frames:v',String(data.frames.length),'-c:v',encoder,'-threads',String(threadedEngine&&settings.codec==='h264'?Math.min(4,navigator.hardwareConcurrency||2):1)];
         args.push('-preset','ultrafast');
         if(settings.codec==='hevc')args.push('-x265-params','pools=none:frame-threads=1','-tune','zerolatency');
         args.push('-b:v',String(settings.bitrate),'-maxrate',String(Math.round(settings.bitrate*1.5)),'-bufsize',String(settings.bitrate*2),'-pix_fmt','yuv420p');if(settings.codec==='hevc')args.push('-tag:v','hvc1');args.push('-an',segment);
         await exec(args);session.segments.push(segment);session.frames+=data.frames.length;return {frames:session.frames};
       }finally{for(const name of names)await remove(name);}
+    });
+    // Browser-native encoders supply Annex B packets: only remux, never re-encode them.
+    if(route==='/api/render/encoded')return serial(async()=>{
+      const session=renders.get(data.id);if(!session||!(data.bytes instanceof Uint8Array)||!Number.isInteger(data.frames)||data.frames<1||data.frames>120)throw Error('Invalid encoded batch.');
+      const raw=session.id+'-encoded.h264',segment=session.id+'-part'+session.segments.length+'.mp4';session.files.push(raw,segment);
+      try{await ff.writeFile(raw,data.bytes);await exec(['-r',String(session.options.fps),'-i',raw,'-map','0:v:0','-c:v','copy','-an',segment]);session.segments.push(segment);session.frames+=data.frames;return {frames:session.frames};}finally{await remove(raw);}
+    });
+    // Decode contiguous simple edits sequentially inside FFmpeg, bypassing canvas/JPEG/seeks.
+    if(route==='/api/render/direct')return serial(async()=>{
+      const session=renders.get(data.id),c=session?.clips[data.index];if(!c)throw Error('Invalid direct export clip.');
+      const m=media.get(c.mediaId),s=session.options,first=Math.ceil((c.start-1e-8)*s.fps),last=Math.ceil((c.start+(c.out-c.in)/(c.speed||1)-1e-8)*s.fps),count=last-first;if(count<=0)return {frames:session.frames};
+      const segment=session.id+'-part'+session.segments.length+'.mp4',still=session.id+'-still.png';session.files.push(segment,still);
+      try{const args=[];if(m.still){await ff.writeFile(still,new Uint8Array(await (await fetch(m.url)).arrayBuffer()));args.push('-loop','1','-framerate',String(s.fps),'-i',still);}else args.push('-ss',String(c.in+(first/s.fps-c.start)*(c.speed||1)),'-i',m.input);
+        args.push('-vf',`setpts=(PTS-STARTPTS)/${c.speed||1},scale=${s.width}:${s.height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${s.width}:${s.height}:(ow-iw)/2:(oh-ih)/2:color=0x080a0a,setsar=1,fps=${s.fps}`,'-frames:v',String(count),'-an','-c:v',s.codec==='hevc'?'libx265':'libx264','-threads',String(threadedEngine?Math.min(4,navigator.hardwareConcurrency||2):1),'-preset','ultrafast');
+        if(s.codec==='hevc')args.push('-x265-params','pools=none:frame-threads=1','-tune','zerolatency');args.push('-b:v',String(s.bitrate),'-maxrate',String(Math.round(s.bitrate*1.5)),'-bufsize',String(s.bitrate*2),'-pix_fmt','yuv420p');if(s.codec==='hevc')args.push('-tag:v','hvc1');args.push(segment);await exec(args);session.segments.push(segment);session.frames+=count;return {frames:session.frames};
+      }finally{await remove(still);}
     });
     if(route==='/api/render/finish'){
       const session=renders.get(data.id);if(!session||!session.segments.length)throw Error('No rendered frames found.');

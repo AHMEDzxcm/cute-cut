@@ -4,23 +4,53 @@ const cancelExport=document.createElement('button');cancelExport.id='cancelProje
 const renderBeforeProjectExport=render;render=function(){renderBeforeProjectExport();$('export').disabled=!clips.length||exportBusy;$('export').title='Choose export settings';$('export').innerHTML='Export video <span>↗</span>';};
 const playBeforeProjectExport=togglePlay;togglePlay=function(){if(!exportBusy&&!exportOptionsDialog.open)playBeforeProjectExport();};
 async function waitForExportFrame(el,target){const deadline=performance.now()+20000;while(true){if(exportCancelled)throw Error('Export cancelled.');const state=previewDecoder(el);if(el.error)throw Error('This video format cannot be decoded by your browser. Try an H.264 MP4.');if(el.readyState>=2&&!el.seeking&&state.target===null&&!state.raf&&Math.abs(el.currentTime-target)<.035)return;if(performance.now()>deadline)throw Error('A video frame could not be decoded. Try converting that recording to H.264 MP4.');await new Promise(resolve=>setTimeout(resolve,10));}}
-async function renderExportFrame(time){
+async function renderExportFrame(time,raw=false){
   setPosition(time,true,true);paintComposition();const active=visibleClips(time),top=active[0];
   await Promise.all(active.map(async c=>{if(source(c).still){const item=stillImageFor(source(c)),deadline=performance.now()+20000;while(!item.ready){if(exportCancelled)throw Error('Export cancelled.');if(item.error||performance.now()>deadline)throw Error('Could not load the freeze frame.');await new Promise(resolve=>setTimeout(resolve,10));}return;}const el=c.id===top?.id?video:visualSources.get(c.id);return waitForExportFrame(el,clipMediaTime(c,time));}));
-  paintComposition();return new Promise((resolve,reject)=>compositionCanvas.toBlob(blob=>blob?resolve(blob):reject(Error('Could not render a video frame.')),'image/jpeg',.94));
+  paintComposition();if(raw)return compositionCanvas;return new Promise((resolve,reject)=>compositionCanvas.toBlob(blob=>blob?resolve(blob):reject(Error('Could not render a video frame.')),'image/jpeg',.94));
+}
+function canDirectExport(){let end=0;for(const c of [...clips].sort((a,b)=>a.start-b.start)){const t={x:0,y:0,scale:1,rotation:0,...c.transform};t.scaleY??=t.scale;if(c.track!==0||Math.abs(c.start-end)>.000001||c.transformKeyframes?.length||c.chroma?.enabled||(c.mask?.type&&c.mask.type!=='none')||t.x!==0||t.y!==0||t.scale!==1||t.scaleY!==1||t.rotation!==0)return false;end=c.start+clipLength(c);}return true;}
+async function nativeExportConfig(s){
+  if(s.codec!=='h264'||typeof VideoEncoder==='undefined'||typeof VideoFrame==='undefined')return null;
+  for(const hardwareAcceleration of ['prefer-hardware','no-preference'])for(const codec of ['avc1.420034','avc1.42002a']){const config={codec,width:s.width,height:s.height,framerate:s.fps,bitrate:s.bitrate,hardwareAcceleration,latencyMode:'realtime',avc:{format:'annexb'}};try{if((await VideoEncoder.isConfigSupported(config)).supported)return config;}catch{}}
+  return null;
+}
+async function exportComposedFrames(session,settings,total,frameCount,config){
+  let frames=[],packets=[],encoder=null,encoderError=null,batchCount=0;
+  try{
+    if(config){encoder=new VideoEncoder({output:chunk=>{const bytes=new Uint8Array(chunk.byteLength);chunk.copyTo(bytes);packets.push(bytes);},error:error=>{encoderError=error;}});encoder.configure(config);}
+    for(let frame=0;frame<frameCount;frame++){
+      if(exportCancelled)throw Error('Export cancelled.');if(encoderError)throw encoderError;
+      while(document.hidden){if(exportCancelled)throw Error('Export cancelled.');await new Promise(resolve=>setTimeout(resolve,100));}
+      const image=await renderExportFrame(Math.min(total-.000001,frame/settings.fps),!!encoder);
+      if(encoder){const vf=new VideoFrame(image,{timestamp:Math.round(frame*1000000/settings.fps),duration:Math.round(1000000/settings.fps)});try{encoder.encode(vf,{keyFrame:batchCount===0});}finally{vf.close();}batchCount++;if(encoder.encodeQueueSize>6)await encoder.flush();}
+      else frames.push(image);
+      const limit=encoder?120:Math.max(4,Math.min(60,Math.floor(60000000/(settings.width*settings.height))));
+      if((encoder?batchCount:frames.length)>=limit||frame===frameCount-1){
+        if(encoder){await encoder.flush();if(encoderError)throw encoderError;const bytes=new Uint8Array(packets.reduce((n,p)=>n+p.length,0));let offset=0;for(const p of packets){bytes.set(p,offset);offset+=p.length;}await request('/api/render/encoded',{method:'POST',body:{id:session.id,bytes,frames:batchCount}});packets=[];batchCount=0;}
+        else{await request('/api/render/chunk',{method:'POST',body:{id:session.id,frames}});frames=[];}
+      }
+      const progress=Math.floor((frame+1)/frameCount*90);$('exportProgress').value=progress;$('exportPercent').textContent=progress+'%';
+    }
+  }finally{if(encoder&&encoder.state!=='closed')encoder.close();}
 }
 async function startProjectExport(settings){
   if(exportBusy||!clips.length)return;pause();layoutClips();const before=playhead,total=duration(),frameCount=Math.ceil(total*settings.fps);
   exportBusy=true;exportCancelled=false;exportCanvasSize={width:settings.width,height:settings.height};
   let session=null;const dialog=$('exportDialog');$('exportTitle').textContent='Rendering your edit';$('exportDescription').textContent='Layers, effects and audio are rendered on your device. Keep this tab open; longer projects take longer.';$('download').hidden=true;$('closeExport').hidden=true;cancelExport.hidden=false;cancelExport.disabled=false;cancelExport.textContent='Cancel export';$('exportProgress').value=0;$('exportPercent').textContent='0%';dialog.showModal();render();
   try{
-    session=await request('/api/render/start',{method:'POST',body:{clips:structuredClone(clips),settings}});let frames=[];
-    for(let frame=0;frame<frameCount;frame++){
-      if(exportCancelled)throw Error('Export cancelled.');
-      while(document.hidden){if(exportCancelled)throw Error('Export cancelled.');await new Promise(resolve=>setTimeout(resolve,100));}
-      frames.push(await renderExportFrame(Math.min(total-.000001,frame/settings.fps)));
-      if(frames.length>=Math.max(4,Math.min(60,Math.floor(60000000/(settings.width*settings.height))))||frame===frameCount-1){await request('/api/render/chunk',{method:'POST',body:{id:session.id,frames}});frames=[];}
-      const progress=Math.floor((frame+1)/frameCount*90);$('exportProgress').value=progress;$('exportPercent').textContent=progress+'%';
+    session=await request('/api/render/start',{method:'POST',body:{clips:structuredClone(clips),settings}});
+    const direct=canDirectExport(),config=direct?null:await nativeExportConfig(settings);
+    window.lastExportPath=direct?'direct':config?'native':'compatible';
+    $('exportDescription').textContent=direct?'Fast export · Processing your cuts directly on this device.':config?'Browser encoder · Rendering all layers and effects. Keep this tab visible.':'Compatible renderer · Rendering all layers and effects. Keep this tab visible.';
+    try{
+      if(direct){const ordered=[...clips].sort((a,b)=>a.start-b.start);for(const c of ordered){if(exportCancelled)throw Error('Export cancelled.');const result=await request('/api/render/direct',{method:'POST',body:{id:session.id,index:clips.indexOf(c)}});const p=Math.floor(result.frames/frameCount*90);$('exportProgress').value=p;$('exportPercent').textContent=p+'%';}}
+      else await exportComposedFrames(session,settings,total,frameCount,config);
+    }catch(error){
+      if(exportCancelled||(!direct&&!config))throw error;
+      // Some drivers accept a configuration and fail at runtime. Restart cleanly.
+      await request('/api/render/abort',{method:'POST',body:{id:session.id}});session=await request('/api/render/start',{method:'POST',body:{clips:structuredClone(clips),settings}});window.lastExportPath='compatible-fallback';$('exportProgress').value=0;$('exportPercent').textContent='0%';$('exportDescription').textContent='Using the compatible renderer for this project. Keep this tab visible.';
+      await exportComposedFrames(session,settings,total,frameCount,null);
     }
     if(exportCancelled)throw Error('Export cancelled.');cancelExport.hidden=true;$('exportDescription').textContent='Finishing the '+settings.format.toUpperCase()+' and mixing your selected audio tracks…';
     let job=await request('/api/render/finish',{method:'POST',body:{id:session.id}});
