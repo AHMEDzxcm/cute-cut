@@ -1,46 +1,34 @@
 # Cute Cut
 
-A small video editor that runs entirely in your browser. No account, footage upload, or server-side encoding is required. The engine downloads from this same site the first time you import a video.
+A lightweight desktop-browser video editor. Media stays on your device; there are no footage uploads or backend encoding costs.
 
-## Features
+## Editing
 
-- Video preview above a single-track timeline
-- Trim by dragging clip edges or entering exact seconds
-- Split, delete, reorder, undo and redo
-- Per-clip volume, mute, and embedded audio-track selection
-- Extract one embedded audio track or all tracks as separate WAV/M4A files
-- Extract the entire recording or the selected trimmed range
-- MP4 export with H.264 video and AAC audio
+- Multiple video layers. Video 1 is a connected magnetic sequence; upper tracks allow free placement.
+- Drag clips before/after each other, onto another layer, or above the tracks to create a layer.
+- Trim, split, copy/cut/paste, duplicate, custom speed from 0.1x to 16x, mute and volume.
+- Click the ruler or blank timeline space to seek. Clip clicks select without moving the preview. Drag the playhead near either edge to scroll.
+- Ctrl+wheel zooms the timeline only. Space plays/pauses unless typing. Open Shortcuts for the supported key bindings.
+- Right-click a video to extract audio. Right-click its audio strip to choose an embedded audio stream. OBS multi-stream recordings are supported; mixed sources cannot be separated.
+- Original, 16:9, 9:16, square, 4:5, 4:3, 3:4 and 21:9 canvases.
+- Drag/resize/rotate in the preview, or use exact scale, position, rotation and alignment controls. Uniform scaling can be disabled.
+- Scale, position and rotation keyframes with visible timeline diamonds and previous/next navigation.
+- Color-based background removal (chroma key), plus rectangle, ellipse and split masks with rotation, feather and inversion. There is no AI retouch or automatic subject segmentation.
 
-Multi-track OBS recordings are supported when their audio sources were recorded as separate streams. This cannot separate sources that were mixed into a single audio track. Video export uses one chosen audio track per clip. Stereo channels remain together when extracting audio.
+## Export
 
-## Use
+Export video renders the actual layered canvas frame by frame, in bounded batches, and mixes the selected audio streams from the original files. Output is H.264/AAC MP4 at 30 fps, with the selected aspect ratio and a maximum long edge of 1920 pixels. Export includes transforms, keyframes, masks, chroma key, speed and volume changes. Keep the tab visible during rendering. Cancel stops after the current batch and releases its temporary files.
 
-Import a video or drag it into the preview. Use the + button on a media card to add footage to the timeline. Click the ruler to scrub, select a clip to edit it, and use Export video when finished. Audio extraction is available on media cards and in Clip settings.
+Projects and imported files live only in the current tab. Export before closing or refreshing. Browser memory and codec support limit large recordings. Files of 2 GB or more are rejected. Unsupported browser video codecs may import for audio extraction but cannot be previewed or exported through the canvas renderer; convert them to H.264 MP4 first.
 
-Space: play/pause. S: split. Delete: remove. Ctrl+Z: undo. Ctrl+Shift+Z: redo.
-
-This is an early browser edition. Projects exist only in the current tab; export before closing or refreshing. Browser memory and codec support limit large recordings. Inputs of 2 GB or more are rejected, and smaller files can still exceed available memory. Native desktop FFmpeg is faster for long OBS recordings. Chrome or Edge on desktop is recommended. Importing, export and audio-preview preparation may take time. No footage is uploaded.
+Load / reset demo imports the included generated scenic sample only when requested. Your own recordings are never bundled with the application.
 
 ## Hosting and updates
 
-This repository is a ready-to-serve static site: there is no Node backend or build step.
+This repository is a static site. Cloudflare Pages uses main, framework None, no build command, output directory /, no environment variables. Commits to main automatically deploy. Keep all files at the root. The _headers file configures response headers. The compressed FFmpeg engine is loaded from this same site.
 
-For Cloudflare Pages Git integration:
+## Development and licenses
 
-- Production branch: `main`
-- Framework preset: None
-- Build command: leave blank
-- Build output directory: `/`
-- Root directory: leave blank
-- Environment variables: none
+Serve the directory over HTTP on localhost. No package installation or backend is needed. The interface is split into timeline, composition, media decoding, effects and export modules. FFmpeg.wasm runs in a worker; inputs use WORKERFS and generated render batches are removed after encoding.
 
-Pushes to main automatically deploy after Git integration is connected. Files must remain together at the site root. The `_headers` file supplies HTTP response headers on Cloudflare Pages. The compressed WASM engine is under Cloudflare's per-file size limit; engine.js decompresses it in the browser.
-
-## Development
-
-Serve this folder over HTTP on localhost with any static server; opening index.html directly with file:// does not support workers. No dependencies need to be installed. app.js handles the interface; engine.js runs operations in a Web Worker through FFmpeg.wasm. Input Files are mounted using WORKERFS so the entire original is not copied into the WASM filesystem at import time. Generated output and previews remain browser-local.
-
-## Third-party software
-
-See THIRD-PARTY-NOTICES.txt. The bundled FFmpeg.wasm engine is GPL-2.0-or-later. The application source is distributed under GPL-3.0-or-later (see LICENSE). No credentials, user media, or test recordings are part of this repository.
+Application source is GPL-3.0-or-later. See LICENSE and THIRD-PARTY-NOTICES.txt for the bundled FFmpeg engine and wrapper licenses.

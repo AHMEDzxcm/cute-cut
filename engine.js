@@ -1,7 +1,7 @@
 /* Cute Cut browser engine. All media processing stays on this device. */
 'use strict';
 window.CuteEngine = (() => {
-  const media = new Map(), jobs = new Map(), preview = new Map();
+  const media = new Map(), jobs = new Map(), preview = new Map(), renders = new Map();
   let ff, loading, queue = Promise.resolve(), exporting = false, logs = '', progress = null;
   const encode = text => new TextEncoder().encode(text);
   function status(text) { const el = document.getElementById('engineStatus'); if (el) el.textContent = text; }
@@ -95,11 +95,41 @@ window.CuteEngine = (() => {
     serial(async()=>{status('Processing on your device…');try{await init();await fn(job);job.status='done';job.progress=100;}catch(e){job.status='error';job.error=e.message+' Try a shorter clip or reload if browser memory is exhausted.';}finally{exporting=false;status('Browser engine ready');}});
     return {id:job.id,status:job.status,progress:job.progress};
   }
+  async function cleanRender(session) {for(const name of session.files)await remove(name);renders.delete(session.id);}
+  function tempoFilters(speed) {const filters=[];while(speed>2){filters.push('atempo=2');speed/=2;}while(speed<.5){filters.push('atempo=0.5');speed*=2;}filters.push('atempo='+speed);return filters.join(',');}
+  async function finishRender(session,job) {
+    const list=session.id+'-list.txt',output=session.id+'-final.mp4';session.files.push(list,output);
+    try {
+      await ff.writeFile(list,encode(session.segments.map(name=>`file '${name}'`).join('\n')));
+      const args=['-f','concat','-safe','0','-i',list],audible=session.clips.filter(c=>media.get(c.mediaId).audio&&c.volume>0),filters=[];
+      for(let i=0;i<audible.length;i++){const c=audible[i];args.push('-i',media.get(c.mediaId).input);filters.push(`[${i+1}:a:${c.audioTrack||0}]atrim=start=${c.in}:end=${c.out},asetpts=PTS-STARTPTS,${tempoFilters(c.speed||1)},volume=${c.volume},aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(c.start*1000)}:all=1[a${i}]`);}
+      if(audible.length){filters.push(audible.map((_,i)=>`[a${i}]`).join('')+`amix=inputs=${audible.length}:normalize=0:duration=longest[audio]`);args.push('-filter_complex',filters.join(';'),'-map','0:v:0','-map','[audio]','-c:a','aac','-b:a','192k');}else args.push('-map','0:v:0','-an');
+      args.push('-c:v','copy','-t',String(session.frames/30),'-movflags','+faststart',output);await exec(args,p=>job.progress=Math.round(p*99));job.url=await readBlob(output,'video/mp4');
+    }finally{await cleanRender(session);}
+  }
   async function request(url,options={}) {
     const route=url.split('?')[0];
     if(route==='/api/status')return {encoder:!!window.WebAssembly,token:'browser-local'};
     if(route==='/api/import')return serial(()=>importVideo(options.body));
-    const data=options.body && typeof options.body==='string'?JSON.parse(options.body):{};
+    const data=options.body && typeof options.body==='string'?JSON.parse(options.body):options.body||{};
+    if(route==='/api/render/start')return serial(async()=>{
+      if(exporting)throw Error('An export is already running.');
+      if(!data.clips?.length||data.clips.length>500)throw Error('Add clips first (maximum 500).');
+      const clips=structuredClone(data.clips);for(const c of clips){const m=media.get(c.mediaId);validateRange(m,c.in,c.out,c.volume);if(m.audio)checkedTrack(m,c.audioTrack||0);if(!Number.isFinite(c.start)||c.start<0||!Number.isFinite(c.speed||1)||(c.speed||1)<.1||(c.speed||1)>16)throw Error('Invalid clip placement or speed.');}
+      await init();exporting=true;const id=crypto.randomUUID(),session={id,clips,frames:0,segments:[],files:[]};renders.set(id,session);return {id};
+    });
+    if(route==='/api/render/chunk')return serial(async()=>{
+      const session=renders.get(data.id);if(!session||!Array.isArray(data.frames)||!data.frames.length||data.frames.length>60)throw Error('Invalid render batch.');
+      const names=[],segment=session.id+'-part'+session.segments.length+'.mp4';session.files.push(segment);
+      try{for(let i=0;i<data.frames.length;i++){const name=session.id+'-frame'+String(i).padStart(3,'0')+'.jpg';names.push(name);await ff.writeFile(name,new Uint8Array(await data.frames[i].arrayBuffer()));}
+        await exec(['-framerate','30','-i',session.id+'-frame%03d.jpg','-frames:v',String(data.frames.length),'-c:v','libx264','-preset','ultrafast','-crf','20','-pix_fmt','yuv420p','-an',segment]);session.segments.push(segment);session.frames+=data.frames.length;return {frames:session.frames};
+      }finally{for(const name of names)await remove(name);}
+    });
+    if(route==='/api/render/finish'){
+      const session=renders.get(data.id);if(!session||!session.segments.length)throw Error('No rendered frames found.');
+      const job={id:crypto.randomUUID(),status:'running',progress:0};jobs.set(job.id,job);serial(async()=>{try{await finishRender(session,job);job.status='done';job.progress=100;}catch(e){job.status='error';job.error=e.message;}finally{exporting=false;status('Browser engine ready');}});return {...job};
+    }
+    if(route==='/api/render/abort')return serial(async()=>{const session=renders.get(data.id);if(session)await cleanRender(session);exporting=false;return {ok:true};});
     if(route==='/api/preview-audio'){const m=media.get(data.mediaId);checkedTrack(m,data.track);return serial(()=>previewAudio(m,data.track));}
     if(route==='/api/extract-audio'){
       const m=media.get(data.mediaId);if(!m?.audio)throw Error('This video has no audio tracks.');
