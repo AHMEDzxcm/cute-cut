@@ -122,6 +122,12 @@ for(const id of ['trimIn','trimOut'])$(id).onchange=()=>{const c=chosen();if(!c)
 timelineViewport.addEventListener('scroll',()=>{document.querySelector('.track-labels').style.transform=`translateY(${-timelineViewport.scrollTop}px)`;});
 // Seek from empty lanes and background, while retaining clip and scrollbar gestures.
 let finishTimelineSeek=null;
+function deselectTimelineClip(){
+  selected=null;selectionKind='video';closeMenu();
+  for(const el of document.querySelectorAll('.clip.selected,.audio-clip.audio-selected'))el.classList.remove('selected','audio-selected');
+  for(const id of ['delete','moveLeft','moveRight'])$(id).disabled=true;
+  settings();
+}
 const PLAYHEAD_SNAP_PX=5,PLAYHEAD_RELEASE_PX=7;
 function nearbyClipEdge(time,edges,locked=null){
   if(locked!==null&&Math.abs(time-locked)*scale<=PLAYHEAD_RELEASE_PX)return locked;
@@ -134,6 +140,7 @@ function seekTimelineFromPointer(event){
   const bounds=timelineViewport.getBoundingClientRect();
   if(event.clientX<bounds.left||event.clientX>=bounds.left+timelineViewport.clientWidth||event.clientY>=bounds.top+timelineViewport.clientHeight)return;
   event.preventDefault();finishTimelineSeek?.();pause();closeMenu();timelineViewport.focus({preventScroll:true});
+  if(!event.target.closest('#playhead'))deselectTimelineClip();
   let pointerX=event.clientX,frame=0,lastTime=performance.now(),dragging=false;
   // Extracted audio follows its video's placement and trim, so these edges
   // cover every visible video/audio start and end, including overlay tracks.
@@ -155,5 +162,6 @@ function seekTimelineFromPointer(event){
 $('ruler').onpointerdown=seekTimelineFromPointer;
 $('playhead').firstElementChild.title='Drag to seek · Snaps only very close to clip edges';
 timelineViewport.addEventListener('pointerdown',event=>{if(event.target.closest('#ruler,.clip,.audio-clip,[data-edge],button,input,textarea,a'))return;seekTimelineFromPointer(event);});
+document.querySelector('.track-labels').addEventListener('pointerdown',event=>{if(event.button===0)deselectTimelineClip();});
 document.querySelector('footer>span:last-child').textContent='Video 1 stays connected · Upper tracks allow gaps · Drag clips to reorder or stack · Ctrl+B split · Space play';
 render();
