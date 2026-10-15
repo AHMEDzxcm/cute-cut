@@ -17,7 +17,7 @@ A lightweight desktop-browser video editor. Media stays on your device; there ar
 
 ## Export
 
-Export video renders the actual layered canvas frame by frame, in bounded batches, and mixes the selected audio streams from the original files. Output is H.264/AAC MP4 at 30 fps, with the selected aspect ratio and a maximum long edge of 1920 pixels. Export includes transforms, keyframes, masks, chroma key, speed and volume changes. Keep the tab visible during rendering. Cancel stops after the current batch and releases its temporary files.
+Export video renders the actual layered canvas frame by frame, in bounded batches, and mixes the selected audio streams from the original files. The export panel supports Original, 480P, 720P, 1080P, 2K and 4K resolutions; Lower, Recommended, Higher or custom video bit rates (0.1–200 Mbps); H.264 or H.265/HEVC; MP4 or MOV; and 24, 25, 30, 50 or 60 fps. The selected canvas aspect ratio is preserved. H.265 uses the isolated threaded browser engine; H.264 remains available on the single-thread fallback. Export includes transforms, keyframes, masks, chroma key, speed and volume changes. Keep the tab visible during rendering. Cancel stops after the current batch and releases its temporary files.
 
 Projects and imported files live only in the current tab. Export before closing or refreshing. Browser memory and codec support limit large recordings. Files of 2 GB or more are rejected. Unsupported browser video codecs may import for audio extraction but cannot be previewed or exported through the canvas renderer; convert them to H.264 MP4 first.
 
@@ -25,7 +25,7 @@ Load / reset demo imports the included generated scenic sample only when request
 
 ## Hosting and updates
 
-This repository is a static site. Cloudflare Pages uses main, framework None, no build command, output directory /, no environment variables. Commits to main automatically deploy. Keep all files at the root. The _headers file configures response headers. The compressed FFmpeg engine is loaded from this same site.
+This repository is a static site. Cloudflare Pages uses main, framework None, no build command, output directory /, no environment variables. Commits to main automatically deploy. Keep all files at the root. The _headers file configures response headers. Both compressed FFmpeg cores are loaded from this same site. Cross-origin isolation headers enable the threaded core and HEVC; browsers without isolation use the original H.264 core.
 
 ## Development and licenses
 

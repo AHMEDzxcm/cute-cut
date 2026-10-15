@@ -2,7 +2,7 @@
 'use strict';
 window.CuteEngine = (() => {
   const media = new Map(), jobs = new Map(), preview = new Map(), renders = new Map();
-  let ff, loading, queue = Promise.resolve(), exporting = false, logs = '', progress = null;
+  let ff, loading, queue = Promise.resolve(), exporting = false, logs = '', progress = null, capabilities, threadedEngine=false;
   const encode = text => new TextEncoder().encode(text);
   function status(text) { const el = document.getElementById('engineStatus'); if (el) el.textContent = text; }
   function serial(fn) { const task = queue.then(fn); queue = task.catch(() => {}); return task; }
@@ -14,11 +14,12 @@ window.CuteEngine = (() => {
       ff = new FFmpegWASM.FFmpeg();
       ff.on('log', ({message}) => { logs = (logs + '\n' + message).slice(-6000); });
       ff.on('progress', ({progress: value}) => { if(progress) progress(Math.max(0, Math.min(1, value))); });
-      const response = await fetch('./ffmpeg-core.bin');
+      threadedEngine=globalThis.crossOriginIsolated&&typeof SharedArrayBuffer!=='undefined';
+      const response = await fetch(threadedEngine?'./ffmpeg-mt.bin':'./ffmpeg-core.bin');
       if (!response.ok) throw Error('Video engine download failed. Check your connection and reload.');
       const bytes = await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
       const wasmURL = URL.createObjectURL(new Blob([bytes], {type:'application/wasm'}));
-      try { await ff.load({coreURL: new URL('./ffmpeg-core.js', location.href).href, wasmURL}); }
+      try { await ff.load({coreURL:new URL(threadedEngine?'./ffmpeg-mt.js':'./ffmpeg-core.js',location.href).href,wasmURL,...(threadedEngine?{workerURL:new URL('./ffmpeg-mt.worker.js',location.href).href}:{})}); }
       finally { URL.revokeObjectURL(wasmURL); }
       status('Browser engine ready');
     })().catch(e => { loading = null; status('Engine unavailable · reload to retry'); throw e; });
@@ -97,14 +98,25 @@ window.CuteEngine = (() => {
   }
   async function cleanRender(session) {for(const name of session.files)await remove(name);renders.delete(session.id);}
   function tempoFilters(speed) {const filters=[];while(speed>2){filters.push('atempo=2');speed/=2;}while(speed<.5){filters.push('atempo=0.5');speed*=2;}filters.push('atempo='+speed);return filters.join(',');}
+  async function exportCapabilities(){
+    if(capabilities)return capabilities;await init();const lines=[],collect=({message})=>lines.push(message);ff.on('log',collect);
+    try{await ff.exec(['-hide_banner','-encoders']);}finally{ff.off('log',collect);}
+    // x265 needs the isolated threaded core; retain H.264 as the fallback.
+    const text=lines.join('\n');capabilities={codecs:[['h264','libx264'],...(threadedEngine?[['hevc','libx265']]:[])].filter(([,encoder])=>new RegExp('\\b'+encoder+'\\b').test(text)).map(([codec])=>codec)};return capabilities;
+  }
+  async function renderOptions(input={}){
+    const options={fps:30,codec:'h264',format:'mp4',bitrate:12000000,...input};
+    if(![24,25,30,50,60].includes(options.fps)||!['mp4','mov'].includes(options.format)||!['h264','hevc'].includes(options.codec)||!Number.isFinite(options.bitrate)||options.bitrate<100000||options.bitrate>200000000)throw Error('Invalid export settings.');
+    if(!(await exportCapabilities()).codecs.includes(options.codec))throw Error('This codec is not available in the browser encoder.');return options;
+  }
   async function finishRender(session,job) {
-    const list=session.id+'-list.txt',output=session.id+'-final.mp4';session.files.push(list,output);
+    const settings=session.options,list=session.id+'-list.txt',output=session.id+'-final.'+settings.format;session.files.push(list,output);
     try {
       await ff.writeFile(list,encode(session.segments.map(name=>`file '${name}'`).join('\n')));
       const args=['-f','concat','-safe','0','-i',list],audible=session.clips.filter(c=>media.get(c.mediaId).audio&&c.volume>0),filters=[];
       for(let i=0;i<audible.length;i++){const c=audible[i];args.push('-i',media.get(c.mediaId).input);filters.push(`[${i+1}:a:${c.audioTrack||0}]atrim=start=${c.in}:end=${c.out},asetpts=PTS-STARTPTS,${tempoFilters(c.speed||1)},volume=${c.volume},aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(c.start*1000)}:all=1[a${i}]`);}
       if(audible.length){filters.push(audible.map((_,i)=>`[a${i}]`).join('')+`amix=inputs=${audible.length}:normalize=0:duration=longest[audio]`);args.push('-filter_complex',filters.join(';'),'-map','0:v:0','-map','[audio]','-c:a','aac','-b:a','192k');}else args.push('-map','0:v:0','-an');
-      args.push('-c:v','copy','-t',String(session.frames/30),'-movflags','+faststart',output);await exec(args,p=>job.progress=Math.round(p*99));job.url=await readBlob(output,'video/mp4');
+      args.push('-c:v','copy','-t',String(session.frames/settings.fps));args.push('-movflags','+faststart');if(settings.codec==='hevc')args.push('-tag:v','hvc1');args.push(output);await exec(args,p=>job.progress=Math.round(p*99));job.url=await readBlob(output,settings.format==='mov'?'video/quicktime':'video/mp4');
     }finally{await cleanRender(session);}
   }
   async function request(url,options={}) {
@@ -112,17 +124,22 @@ window.CuteEngine = (() => {
     if(route==='/api/status')return {encoder:!!window.WebAssembly,token:'browser-local'};
     if(route==='/api/import')return serial(()=>importVideo(options.body));
     const data=options.body && typeof options.body==='string'?JSON.parse(options.body):options.body||{};
+    if(route==='/api/export-capabilities')return serial(exportCapabilities);
     if(route==='/api/render/start')return serial(async()=>{
       if(exporting)throw Error('An export is already running.');
       if(!data.clips?.length||data.clips.length>500)throw Error('Add clips first (maximum 500).');
       const clips=structuredClone(data.clips);for(const c of clips){const m=media.get(c.mediaId);validateRange(m,c.in,c.out,c.volume);if(m.audio)checkedTrack(m,c.audioTrack||0);if(!Number.isFinite(c.start)||c.start<0||!Number.isFinite(c.speed||1)||(c.speed||1)<.1||(c.speed||1)>16)throw Error('Invalid clip placement or speed.');}
-      await init();exporting=true;const id=crypto.randomUUID(),session={id,clips,frames:0,segments:[],files:[]};renders.set(id,session);return {id};
+      await init();const settings=await renderOptions(data.settings);exporting=true;const id=crypto.randomUUID(),session={id,clips,options:settings,frames:0,segments:[],files:[]};renders.set(id,session);return {id};
     });
     if(route==='/api/render/chunk')return serial(async()=>{
       const session=renders.get(data.id);if(!session||!Array.isArray(data.frames)||!data.frames.length||data.frames.length>60)throw Error('Invalid render batch.');
-      const names=[],segment=session.id+'-part'+session.segments.length+'.mp4';session.files.push(segment);
+      const names=[],settings=session.options,segment=session.id+'-part'+session.segments.length+'.mp4';session.files.push(segment);
       try{for(let i=0;i<data.frames.length;i++){const name=session.id+'-frame'+String(i).padStart(3,'0')+'.jpg';names.push(name);await ff.writeFile(name,new Uint8Array(await data.frames[i].arrayBuffer()));}
-        await exec(['-framerate','30','-i',session.id+'-frame%03d.jpg','-frames:v',String(data.frames.length),'-c:v','libx264','-preset','ultrafast','-crf','20','-pix_fmt','yuv420p','-an',segment]);session.segments.push(segment);session.frames+=data.frames.length;return {frames:session.frames};
+        const encoder=settings.codec==='hevc'?'libx265':'libx264',args=['-framerate',String(settings.fps),'-i',session.id+'-frame%03d.jpg','-frames:v',String(data.frames.length),'-c:v',encoder,'-threads','1'];
+        args.push('-preset','ultrafast');
+        if(settings.codec==='hevc')args.push('-x265-params','pools=none:frame-threads=1','-tune','zerolatency');
+        args.push('-b:v',String(settings.bitrate),'-maxrate',String(Math.round(settings.bitrate*1.5)),'-bufsize',String(settings.bitrate*2),'-pix_fmt','yuv420p');if(settings.codec==='hevc')args.push('-tag:v','hvc1');args.push('-an',segment);
+        await exec(args);session.segments.push(segment);session.frames+=data.frames.length;return {frames:session.frames};
       }finally{for(const name of names)await remove(name);}
     });
     if(route==='/api/render/finish'){

@@ -20,3 +20,9 @@ Decompress it with standard gzip tools to recover the original binary.
 
 The core includes codecs and libraries listed by FFmpeg's -version output.
 The wrapper's source maps are not needed at runtime.
+
+FFmpeg.wasm multi-thread core: @ffmpeg/core-mt 0.12.10
+License: GPL-2.0-or-later (same license and corresponding source/build links above).
+ffmpeg-mt.js and ffmpeg-mt.worker.js are the unmodified upstream UMD loader and worker.
+ffmpeg-mt.bin is the unmodified upstream ffmpeg-core.wasm compressed with gzip.
+Package source: https://www.npmjs.com/package/@ffmpeg/core-mt/v/0.12.10
