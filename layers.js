@@ -122,14 +122,24 @@ for(const id of ['trimIn','trimOut'])$(id).onchange=()=>{const c=chosen();if(!c)
 timelineViewport.addEventListener('scroll',()=>{document.querySelector('.track-labels').style.transform=`translateY(${-timelineViewport.scrollTop}px)`;});
 // Seek from empty lanes and background, while retaining clip and scrollbar gestures.
 let finishTimelineSeek=null;
+const PLAYHEAD_SNAP_PX=5,PLAYHEAD_RELEASE_PX=7;
+function nearbyClipEdge(time,edges,locked=null){
+  if(locked!==null&&Math.abs(time-locked)*scale<=PLAYHEAD_RELEASE_PX)return locked;
+  let nearest=null,distance=PLAYHEAD_SNAP_PX;
+  for(const edge of edges){const pixels=Math.abs(time-edge)*scale;if(pixels<=distance){nearest=edge;distance=pixels;}}
+  return nearest;
+}
 function seekTimelineFromPointer(event){
   if(event.button!==0)return;
   const bounds=timelineViewport.getBoundingClientRect();
   if(event.clientX<bounds.left||event.clientX>=bounds.left+timelineViewport.clientWidth||event.clientY>=bounds.top+timelineViewport.clientHeight)return;
   event.preventDefault();finishTimelineSeek?.();pause();closeMenu();timelineViewport.focus({preventScroll:true});
   let pointerX=event.clientX,frame=0,lastTime=performance.now(),dragging=false;
+  // Extracted audio follows its video's placement and trim, so these edges
+  // cover every visible video/audio start and end, including overlay tracks.
+  layoutClips();const edges=[...new Set(clips.flatMap(c=>[c.start,c.start+clipLength(c)]))];let snappedEdge=null;
   const originX=event.clientX,originY=event.clientY;
-  const seek=()=>{const viewport=timelineViewport.getBoundingClientRect(),box=$('timelineCanvas').getBoundingClientRect(),x=Math.max(viewport.left,Math.min(viewport.left+timelineViewport.clientWidth-1,pointerX));setPosition((x-box.left)/scale,true,true);};
+  const seek=()=>{const viewport=timelineViewport.getBoundingClientRect(),box=$('timelineCanvas').getBoundingClientRect(),x=Math.max(viewport.left,Math.min(viewport.left+timelineViewport.clientWidth-1,pointerX)),time=(x-box.left)/scale;snappedEdge=nearbyClipEdge(time,edges,snappedEdge);$('playhead').classList.toggle('snapped-to-edge',snappedEdge!==null);setPosition(snappedEdge??time,true,true);};
   const move=ev=>{pointerX=ev.clientX;if(Math.hypot(ev.clientX-originX,ev.clientY-originY)>3)dragging=true;seek();};
   const animate=now=>{
     const dt=Math.min(.05,(now-lastTime)/1000);lastTime=now;
@@ -139,10 +149,11 @@ function seekTimelineFromPointer(event){
     }
     frame=requestAnimationFrame(animate);
   };
-  const finish=()=>{cancelAnimationFrame(frame);window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',finish);window.removeEventListener('pointercancel',finish);window.removeEventListener('blur',finish);finishTimelineSeek=null;};
+  const finish=()=>{cancelAnimationFrame(frame);window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',finish);window.removeEventListener('pointercancel',finish);window.removeEventListener('blur',finish);$('playhead').classList.remove('snapped-to-edge');finishTimelineSeek=null;};
   finishTimelineSeek=finish;seek();window.addEventListener('pointermove',move);window.addEventListener('pointerup',finish);window.addEventListener('pointercancel',finish);window.addEventListener('blur',finish);frame=requestAnimationFrame(animate);
 }
 $('ruler').onpointerdown=seekTimelineFromPointer;
+$('playhead').firstElementChild.title='Drag to seek · Snaps only very close to clip edges';
 timelineViewport.addEventListener('pointerdown',event=>{if(event.target.closest('#ruler,.clip,.audio-clip,[data-edge],button,input,textarea,a'))return;seekTimelineFromPointer(event);});
 document.querySelector('footer>span:last-child').textContent='Video 1 stays connected · Upper tracks allow gaps · Drag clips to reorder or stack · Ctrl+B split · Space play';
 render();
